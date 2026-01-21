@@ -1,8 +1,15 @@
-#!/bin/sh
+#!/bin/bash
+#
+# File     : deploy_direct_path.sh
+# Author   : sun.wang
+# Mail     : sunowsir@163.com
+# Github   : github.com/sunowsir
+# Creation : 2026-01-21 14:24:02
+#
 set -e
 
 DEV="br-lan"
-BPF_OBJ="tc_direct_accel.o"
+BPF_OBJ="tc_direct_path.o"
 BPF_DIR="/sys/fs/bpf/tc_progs"
 PROG_PIN="$BPF_DIR/tc_accel_prog"
 MAP_PIN="$BPF_DIR/direct_ip_map"

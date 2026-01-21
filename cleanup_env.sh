@@ -1,4 +1,11 @@
-#!/bin/sh
+#!/bin/bash
+#
+# File     : cleanup_env.sh
+# Author   : sun.wang
+# Mail     : sunowsir@163.com
+# Github   : github.com/sunowsir
+# Creation : 2026-01-21 14:24:02
+#
 
 # 定义变量（需与部署脚本保持一致）
 DEV="br-lan"
