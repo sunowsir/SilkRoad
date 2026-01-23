@@ -51,25 +51,32 @@ typedef struct {
 } lpm_key_t;
 
 /* 私网检查函数 */
-static __always_inline int is_private_ip(__u32 ip) {
-    __u32 host_ip = bpf_ntohl(ip);
-    if ((host_ip & 0xFF000000) == 0x0A000000) return 1; // 10.0.0.0/8
-    if ((host_ip & 0xFFF00000) == 0xAC100000) return 1; // 172.16.0.0/12
-    if ((host_ip & 0xFFFF0000) == 0xC0A80000) return 1; // 192.168.0.0/16
+static __always_inline int is_private_ip(__u32 *ip) {
+    if ((bpf_ntohl(*ip) & 0xFF000000) == 0x0A000000) return 1; // 10.0.0.0/8
+    if ((bpf_ntohl(*ip) & 0xFFF00000) == 0xAC100000) return 1; // 172.16.0.0/12
+    if ((bpf_ntohl(*ip) & 0xFFFF0000) == 0xC0A80000) return 1; // 192.168.0.0/16
     return 0;
 }
 
-static __always_inline int do_lookup_map(__u32 *addr, lpm_key_t *key) {
-    if (unlikely(NULL == addr) || unlikely(NULL == key)) return 0;
+/* 查找Map */
+static __always_inline int do_lookup_map(__u32 *addr) {
+    if (unlikely(NULL == addr)) return 0;
 
-    // 3. 检查缓存 
+    lpm_key_t key = {.ipv4 = *addr, .prefixlen = 32};
+
+    /* 检查黑名单 (源或目的在黑名单则不加速) */
+    if (bpf_map_lookup_elem(&blklist_ip_map, &key)) return 0;
+
+    /* 查缓存一级白名单表之前检查地址是否是私网地址是为了防止缓存或国内IP白名单中混入私网地址 */
+    if (is_private_ip(addr)) return 0;
+
+    /* 检查缓存  */
     if (bpf_map_lookup_elem(&hotpath_cache, addr)) {
         return 1;
     }
 
-    // 4. 查白名单并更新缓存
-    key->ipv4 = *addr;
-    if (bpf_map_lookup_elem(&direct_ip_map, key)) {
+    /* 查白名单并更新缓存 */
+    if (bpf_map_lookup_elem(&direct_ip_map, &key)) {
         bpf_map_update_elem(&hotpath_cache, addr, &(__u64){bpf_ktime_get_ns()}, BPF_ANY);
         return 1;
     } 
@@ -77,25 +84,21 @@ static __always_inline int do_lookup_map(__u32 *addr, lpm_key_t *key) {
     return 0;
 }
 
-/* 核心查找逻辑：直接操作具体 Map 避免指针丢失上下文 */
+/* 判断是否应当加速 */
 static __always_inline int do_lookup(struct iphdr *iph) {
-    lpm_key_t key = {.prefixlen = 32};
+    if (unlikely(NULL == iph)) return 0;
 
-    // 1. 过滤纯内网互访
-    if (is_private_ip(iph->saddr) && is_private_ip(iph->daddr)) return 0;
+    /* 过滤纯内网互访 */
+    if (is_private_ip(&(iph->saddr)) && is_private_ip(&(iph->daddr))) return 0;
 
-    // 2. 检查黑名单 (源或目的在黑名单则不加速)
-    key.ipv4 = iph->daddr;
-    if (bpf_map_lookup_elem(&blklist_ip_map, &key)) return 0;
-    key.ipv4 = iph->saddr;
-    if (bpf_map_lookup_elem(&blklist_ip_map, &key)) return 0;
-
-    if (!is_private_ip(iph->daddr) && do_lookup_map(&(iph->daddr), &key)) {
+    /* 查询目的IP */
+    if (do_lookup_map(&(iph->daddr))) {
         // bpf_trace_printk("Direct path match daddr: %pI4 -> %pI4\n", sizeof("Direct path match daddr: %pI4 -> %pI4\n"), &iph->saddr, &iph->daddr);
         return 1;
     }
 
-    if (!is_private_ip(iph->saddr) && do_lookup_map(&(iph->saddr), &key)) {
+    /* 查询源IP */
+    if (do_lookup_map(&(iph->saddr))) {
         // bpf_trace_printk("Direct path match saddr: %pI4 -> %pI4\n", sizeof("Direct path match daddr: %pI4 -> %pI4\n"), &iph->saddr, &iph->daddr);
         return 1;
     }
@@ -105,6 +108,8 @@ static __always_inline int do_lookup(struct iphdr *iph) {
 
 SEC("classifier")
 int tc_direct_path(struct __sk_buff *skb) {
+    if (unlikely(NULL == skb)) return TC_ACT_OK;
+
     if (skb->protocol != bpf_htons(ETH_P_IP))
         return TC_ACT_OK;
 
