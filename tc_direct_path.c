@@ -15,10 +15,14 @@
 
 #define DIRECT_MARK 0x88
 
+#define CACHE_IP_MAP_SIZE       65536
+#define BLKLIST_IP_MAP_SIZE     8192
+#define DIRECT_IP_MAP_SIZE      16384
+
 /* 定义 LRU Hash Map (缓存) */
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 65536);
+    __uint(max_entries, CACHE_IP_MAP_SIZE);
     __uint(key_size, 4);
     __uint(value_size, 8);
 } hotpath_cache SEC(".maps");
@@ -26,7 +30,7 @@ struct {
 /* 黑名单 (LPM) */
 struct {
     __uint(type, BPF_MAP_TYPE_LPM_TRIE);
-    __uint(max_entries, 8192);
+    __uint(max_entries, BLKLIST_IP_MAP_SIZE);
     __uint(key_size, 8);
     __uint(value_size, 4);
     __uint(map_flags, BPF_F_NO_PREALLOC);
@@ -35,7 +39,7 @@ struct {
 /* 国内 IP 白名单 (LPM) */
 struct {
     __uint(type, BPF_MAP_TYPE_LPM_TRIE);
-    __uint(max_entries, 16384);
+    __uint(max_entries, DIRECT_IP_MAP_SIZE);
     __uint(key_size, 8);
     __uint(value_size, 4);
     __uint(map_flags, BPF_F_NO_PREALLOC);

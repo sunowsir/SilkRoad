@@ -1,5 +1,5 @@
-# DirectPath
-eBPF学习项目：利用ebpf实现国内IP绕过openclash实现快速转发
+# DirectPath 加速引擎
+> 直连流量加速引擎：利用ebpf实现国内IP绕过openclash实现快速转发
 
 ## 部署方法
 
@@ -16,8 +16,11 @@ eBPF学习项目：利用ebpf实现国内IP绕过openclash实现快速转发
   
 ## 调试信息 
 
-  1. 查看调试信息可在`openwrt`设备上执行：`cat /sys/kernel/debug/tracing/trace_pipe`
+  1. 查看调试信息，可将代码中的打印打开，然后在`openwrt`设备上执行：`cat /sys/kernel/debug/tracing/trace_pipe`
+  2. 执行`monitor_hotpath.sh`脚本查看当前缓存存储的地址
+  3. 执行`check_cache.sh`查看缓存利用率信息
 
 ## 缓存 
 
   1. 查看缓存利用率，执行 `check_cache.sh`
+  2. 执行`monitor_hotpath.sh`脚本查看当前缓存存储的地址
