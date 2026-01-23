@@ -15,7 +15,7 @@ if [ ! -e "$MAP_PATH" ]; then
 fi
 
 # 获取最大容量
-MAX=$(bpftool map show pinned "$MAP_PATH" | grep -oE "max_entries [0-4]+" | awk '{print $2}')
+MAX=$(bpftool map show pinned "$MAP_PATH" | grep -oE "max_entries [0-9]+" | awk '{print $2}')
 
 # 获取当前条目数 (通过查找 key 关键字)
 CUR=$(bpftool map dump pinned "$MAP_PATH" | grep -c "key:")

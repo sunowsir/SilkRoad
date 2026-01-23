@@ -15,10 +15,10 @@
 
 #define DIRECT_MARK 0x88
 
-/* 定义 LRU Hash Map (快车道缓存) */
+/* 定义 LRU Hash Map (缓存) */
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 1024);
+    __uint(max_entries, 65536);
     __uint(key_size, 4);
     __uint(value_size, 8);
 } hotpath_cache SEC(".maps");
@@ -26,11 +26,11 @@ struct {
 /* 黑名单 (LPM) */
 struct {
     __uint(type, BPF_MAP_TYPE_LPM_TRIE);
-    __uint(max_entries, 1024);
+    __uint(max_entries, 8192);
     __uint(key_size, 8);
     __uint(value_size, 4);
     __uint(map_flags, BPF_F_NO_PREALLOC);
-} blacklist_ip_map SEC(".maps");
+} blklist_ip_map SEC(".maps");
 
 /* 国内 IP 白名单 (LPM) */
 struct {
@@ -82,9 +82,9 @@ static __always_inline int do_lookup(struct iphdr *iph) {
 
     // 2. 检查黑名单 (源或目的在黑名单则不加速)
     key.ipv4 = iph->daddr;
-    if (bpf_map_lookup_elem(&blacklist_ip_map, &key)) return 0;
+    if (bpf_map_lookup_elem(&blklist_ip_map, &key)) return 0;
     key.ipv4 = iph->saddr;
-    if (bpf_map_lookup_elem(&blacklist_ip_map, &key)) return 0;
+    if (bpf_map_lookup_elem(&blklist_ip_map, &key)) return 0;
 
     if (!is_private_ip(iph->daddr) && do_lookup_map(&(iph->daddr), &key)) {
         // bpf_trace_printk("Direct path match daddr: %pI4 -> %pI4\n", sizeof("Direct path match daddr: %pI4 -> %pI4\n"), &iph->saddr, &iph->daddr);
