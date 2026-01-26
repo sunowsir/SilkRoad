@@ -54,19 +54,19 @@ struct {
     __uint(map_flags, BPF_F_NO_PREALLOC);
 } blklist_ip_map SEC(".maps");
 
-/* 国内 IP 白名单 (LPM) */
-struct {
-    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
-    __uint(max_entries, DIRECT_IP_MAP_SIZE);
-    __uint(key_size, 8);
-    __uint(value_size, 4);
-    __uint(map_flags, BPF_F_NO_PREALLOC);
-} direct_ip_map SEC(".maps");
-
 typedef struct {
     __u32 prefixlen;
     __u32 ipv4;
 } lpm_key_t;
+
+/* 国内 IP 白名单 (LPM) */
+struct {
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __uint(max_entries, DIRECT_IP_MAP_SIZE);
+    __uint(key_size, sizeof(lpm_key_t));
+    __uint(value_size, 4);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+} direct_ip_map SEC(".maps");
 
 /* 私网检查函数 */
 static __always_inline int is_private_ip(__u32 *ip) {
@@ -99,7 +99,8 @@ static __always_inline int do_lookup_map(__u32 *addr) {
 
    if (pv) {
         /* 原子操作，包计数递增 */
-        __u32 c = __sync_fetch_and_add(&pv->count, 1);
+        /* __sync_fetch_and_add 返回的是自增前的值，因此需要加1进行判断 */
+        __u32 c = __sync_fetch_and_add(&pv->count, 1) + 1;
         
         /* 加入缓存，判定标准：见过超过 HOTPKG_NUM 个包，且距离第一次见面已经过了 HOTPKG_INV_TIME 秒 */
         if (c >= HOTPKG_NUM && ((now - pv->first_seen) > HOTPKG_INV_TIME)) {
@@ -159,7 +160,7 @@ int tc_direct_path(struct __sk_buff *skb) {
     if ((void *)(iph + 1) > data_end) return TC_ACT_OK;
 
     if (do_lookup(iph)) {
-        skb->mark = DIRECT_MARK;
+        skb->mark = bpf_htonl(DIRECT_MARK);
         // 调试打印可按需开启
         // bpf_trace_printk("Direct path session: %pI4 -> %pI4\n", sizeof("Direct path session: %pI4 -> %pI4\n"), &iph->saddr, &iph->daddr);
     }
