@@ -132,28 +132,54 @@ tc filter add dev "${LAN_DEV}" egress bpf da pinned "${FINAL_PIN_PATH}"
 
 tc qdisc add dev "${WAN_DEV}" clsact
 tc filter add dev "${WAN_DEV}" ingress bpf da pinned "${FINAL_PIN_PATH}"
+tc filter add dev "${WAN_DEV}" egress bpf da pinned "${FINAL_PIN_PATH}"
 
 # --- 5. Nftables 联动 ---
-info "5. 配置 nftables 联动 (安全加速模式) ..."
+info "5. 配置 nftables 联动 (全路径安全加速模式) ..."
 
 nft delete table inet bpf_accel 2>/dev/null || true
 nft add table inet bpf_accel
 
-# 开启 flowtable 加速引擎
+# 1. 开启 flowtable 加速引擎 (针对转发流量)
 nft "add flowtable inet bpf_accel ft { hook ingress priority 0; devices = { ${LAN_DEV}, ${WAN_DEV} }; }"
 
+# 2. 定义计数器
 nft add counter inet bpf_accel accel_packets
-nft "add chain inet bpf_accel forward { type filter hook forward priority 0; policy accept; }"
+nft add counter inet bpf_accel local_accel_in
+nft add counter inet bpf_accel local_accel_out
+
+# 3. 创建链 (设置 priority 为 0 或 filter，确保在大多数插件之前执行，但晚于 conntrack)
 nft "add chain inet bpf_accel monitor_chain { type filter hook prerouting priority -301; policy accept; }"
+nft "add chain inet bpf_accel forward { type filter hook forward priority 0; policy accept; }"
+nft "add chain inet bpf_accel input { type filter hook input priority 0; policy accept; }"
+nft "add chain inet bpf_accel output { type filter hook output priority 0; policy accept; }"
 
-# 监控与 Flow Offload 规则
+# --- 规则部分 ---
+
+# A. 监控：在 Prerouting 记录所有被 eBPF 打标的原始包
 nft "add rule inet bpf_accel monitor_chain meta mark & 0xff000000 == ${DIRECT_PATH_MARK} counter name accel_packets"
-# 转发链，标记了88，那么走软件流量分载 
-# 如果不支持软件流量分载，则改成accept： 
-# nft "add rule inet bpf_accel forward meta mark & 0xff000000 == ${DIRECT_PATH_MARK} counter accept"
-nft "add rule inet bpf_accel forward meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established flow add @ft"
 
-echo "---------------------------------------"
-echo "加速引擎已启动！"
-echo "程序位置: ${TC_PROG_PIN}"
-echo "---------------------------------------"
+# B. 转发加速 (Forwarding)：针对内网设备。
+# 只有已建立的连接才进入 Flowtable，确保安全性
+nft "add rule inet bpf_accel forward meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established flow add @ft"
+# 如果 flowtable 没接管，这里作为保底直接放行，跳过后续防火墙
+nft "add rule inet bpf_accel forward meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established counter accept"
+
+# C. 本地入站加速 (Input)：针对发往路由器的直连回包
+# 严格限定 established 状态：确保只有路由器主动发起的请求回包能跳过防火墙
+# 这样你设置的“禁止外网 SSH”等规则对第一个 SYN 包依然有效
+nft "add rule inet bpf_accel input meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established counter name local_accel_in accept"
+
+# D. 本地出站加速 (Output)：针对路由器主动发出的请求
+# 绕过 OpenClash 在 Output 链上的判定逻辑，直接送往 postrouting
+nft "add rule inet bpf_accel output meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established counter name local_accel_out accept"
+
+info "---------------------------------------"
+info "加速引擎已启动！"
+info "转发加速: Flowtable (Established Only)"
+info "本地加速: Input/Output Bypass (Established Only)"
+info "---------------------------------------"
+
+info "---------------------------------------"
+info "程序位置: ${TC_PROG_PIN}"
+info "---------------------------------------"

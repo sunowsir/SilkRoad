@@ -8,4 +8,4 @@
 #
 
 nft list table inet bpf_accel
-cat /proc/net/nf_conntrack | grep "ESTABLISHED"
+conntrack -L | grep 'OFFLOAD'
