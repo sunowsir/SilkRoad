@@ -148,6 +148,9 @@ nft "add chain inet bpf_accel monitor_chain { type filter hook prerouting priori
 
 # 监控与 Flow Offload 规则
 nft "add rule inet bpf_accel monitor_chain meta mark & 0xff000000 == ${DIRECT_PATH_MARK} counter name accel_packets"
+# 转发链，标记了88，那么走软件流量分载 
+# 如果不支持软件流量分载，则改成accept： 
+# nft "add rule inet bpf_accel forward meta mark & 0xff000000 == ${DIRECT_PATH_MARK} counter accept"
 nft "add rule inet bpf_accel forward meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established flow add @ft"
 
 echo "---------------------------------------"
