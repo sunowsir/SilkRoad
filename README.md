@@ -2,7 +2,7 @@
 > 直连流量加速引擎：利用ebpf实现国内IP流量快速转发
 
 ## 部署方法
-  > 若执`check_cache.sh`发现缓存急速上涨并爆满，大概率是内网的P2P或CSDN服务导致
+  > 若执`check_cache.sh`发现缓存急速上涨并爆满，大概率是内网的P2P或PCDN服务导致
 
   1. 解压openwrt编译好的llvm工具链：`llvm-bpf-21.1.6.Linux-x86_64`
   2. 将代码`tc_direct_path.c`和编译脚本`build.sh`拷贝到工具链目录中`llvm-bpf-21.1.6.Linux-x86_64/llvm-bpf/`
