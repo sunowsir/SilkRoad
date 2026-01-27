@@ -51,7 +51,7 @@ echo "2. 显式创建并固定 Map (确保内核对象先于程序存在)..."
 bpftool map create ${HOTPATH_PIN} type lru_hash key 4 value 8 entries ${HOTMAP_SIZE} name hotpath_cache
 
 # 创建 pre_cache (LRU_HASH: type 9, key 4B, value 16B, max 1024)
-bpftool map create ${PRE_PIN} type lru_hash key 4 value 16 entries ${PREMAP_SIZE} name hotpath_cache
+bpftool map create ${PRE_PIN} type lru_hash key 4 value 16 entries ${PREMAP_SIZE} name pre_cache
 
 # 创建 blklist_ip_map (LPM_TRIE: type 11, key 8B, value 4B, max 1024, flags 1)
 bpftool map create ${BLACK_PIN} type lpm_trie key 8 value 4 entries ${BLACKMAP_SIZE} name blklist_ip_map flags 1

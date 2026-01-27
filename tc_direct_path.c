@@ -103,7 +103,7 @@ static __always_inline int do_lookup_map(__u32 *addr) {
         __u32 c = __sync_fetch_and_add(&pv->count, 1) + 1;
         
         /* 加入缓存，判定标准：见过超过 HOTPKG_NUM 个包，且距离第一次见面已经过了 HOTPKG_INV_TIME 秒 */
-        if (c >= HOTPKG_NUM && ((now - pv->first_seen) > HOTPKG_INV_TIME)) {
+        if ((c >= HOTPKG_NUM) && ((now - pv->first_seen) > HOTPKG_INV_TIME)) {
             bpf_map_update_elem(&hotpath_cache, addr, &now, BPF_ANY);
         }
 
