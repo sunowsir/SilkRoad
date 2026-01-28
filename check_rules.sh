@@ -7,5 +7,6 @@
 # Creation : 2026-01-26 17:40:10
 #
 
-nft list table inet bpf_accel
+nft -a list chain inet fw4 dstnat
+nft -a list table inet bpf_accel
 conntrack -L | grep 'OFFLOAD'

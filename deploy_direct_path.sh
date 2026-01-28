@@ -10,16 +10,13 @@
 set -euo pipefail
 
 # --- 配置参数 ---
-LAN_DEV="${LAN_DEV:-eth1}"
-WAN_DEV="${WAN_DEV:-eth0}"
+LAN_IF="eth1"
+WAN_IF="eth0"
 BPF_OBJ="${BPF_OBJ:-tc_direct_path.o}"
 BPF_DIR="${BPF_DIR:-/sys/fs/bpf/tc_progs}"
 
-# 程序固定点路径 (loadall 会在此目录下创建以 SEC 名称命名的文件)
+# 程序固定点路径
 PROG_BASE="${BPF_DIR}/tc_accel_prog"
-# 具体的 SEC 名称决定了最终 tc 挂载的文件路径
-TC_PROG_PIN="${PROG_BASE}/classifier"
-
 # Map 固定路径
 HOTPATH_PIN="${BPF_DIR}/hotpath_cache"
 PRE_PIN="${BPF_DIR}/pre_cache"
@@ -32,154 +29,150 @@ PREMAP_SIZE=${PREMAP_SIZE:-65536}
 BLACKMAP_SIZE=${BLACKMAP_SIZE:-8192}
 DIRECTMAP_SIZE=${DIRECTMAP_SIZE:-16384}
 
+# 加速mark标记
 DIRECT_PATH_MARK="${DIRECT_PATH_MARK:-0x88000000}"
+
+# 优先级配置
+# 抢在 OpenClash (-150/-100) 之前
+BYPASS_PRIORITY="-151" 
+BPF_ACCEL_FORWARD_PRIORITY="1"
+BPF_ACCEL_INPUT_PRIORITY="1"
+BPF_ACCEL_OUTPUT_PRIORITY="1"
 
 # 必需命令列表
 readonly REQUIRED_CMDS=(bpftool tc nft mount umount ip)
 
 # --- 辅助函数 ---
-err() { echo "ERROR: $*" >&2; }
-info() { echo "INFO: $*"; }
-
-# --- 环境检查 ---
-if [[ $(id -u) -ne 0 ]]; then
-    err "该脚本必须以 root 运行"
-    exit 1
-fi
-
-for cmd in "${REQUIRED_CMDS[@]}"; do
-    if ! command -v "${cmd}" >/dev/null 2>&1; then
-        err "未找到必需命令: ${cmd}。请先安装或将其加入 PATH。"
-        exit 2
-    fi
-done
-
-for dev in "${LAN_DEV}" "${WAN_DEV}"; do
-    if ! ip link show "${dev}" >/dev/null 2>&1; then
-        err "网络接口 ${dev} 不存在。请检查配置。"
-        exit 3
-    fi
-done
-
-# --- 1. 清理阶段 ---
-info "1. 彻底清理 BPF 虚拟文件系统（如存在）..."
-
-# 清理 tc qdisc
-tc qdisc del dev "${LAN_DEV}" clsact 2>/dev/null || true
-tc qdisc del dev "${WAN_DEV}" clsact 2>/dev/null || true
-
-# 卸载并重置 bpffs 目录
-if mountpoint -q "${BPF_DIR}" 2>/dev/null || [[ -d "${BPF_DIR}" ]]; then
-    umount -f "${BPF_DIR}" 2>/dev/null || true
-    rm -rf "${BPF_DIR}"
-fi
-
-mkdir -p "${BPF_DIR}"
-
-if ! mount -t bpf bpf "${BPF_DIR}" 2>/dev/null; then
-    info "注意: 无法显式 mount bpffs（可能系统已处理）。继续尝试..."
-fi
-
-# --- 2. 创建 Map ---
-info "2. 显式创建并固定 Map (确保内核对象先于程序存在)..."
-
-# 封装 map 创建函数以符合规范
-create_map() {
-    local path=$1; local type=$2; local k=$3; local v=$4; local entries=$5; local name=$6; local flags=${7:-0}
-    bpftool map create "$path" type "$type" key "$k" value "$v" entries "$entries" name "$name" flags "$flags" || {
-        err "创建 Map $name 失败"; exit 4;
-    }
+function err() { echo "ERROR: $*" >&2; }
+function info() { echo "INFO: $*"; }
+function tc_pin_clean() {
+    tc qdisc del dev "${LAN_IF}" clsact 2>/dev/null || true
+    tc qdisc del dev "${WAN_IF}" clsact 2>/dev/null || true
+}
+function get_pin_path() {
+    local path
+    path=$(find "${PROG_BASE}" -maxdepth 1 -type f -print -quit 2>/dev/null)
+    echo "$path"
 }
 
-create_map "${HOTPATH_PIN}" lru_hash 4 8 "${HOTMAP_SIZE}" hotpath_cache
-create_map "${PRE_PIN}" lru_hash 4 16 "${PREMAP_SIZE}" pre_cache
-create_map "${BLACK_PIN}" lpm_trie 8 4 "${BLACKMAP_SIZE}" blklist_ip_map 1
-create_map "${DIRECT_PIN}" lpm_trie 8 4 "${DIRECTMAP_SIZE}" direct_ip_map 1
+# --- 环境检查 ---
+function env_check() {
+    info "0. 环境检查..."
+    if [[ $(id -u) -ne 0 ]]; then err "该脚本必须以 root 运行"; exit 1; fi
+    
+    for cmd in "${REQUIRED_CMDS[@]}"; do
+        command -v "${cmd}" >/dev/null 2>&1 || { err "未找到必需命令: ${cmd}"; exit 2; }
+    done
+}
 
-# --- 3. 使用 loadall 加载 ---
-info "3. 使用 loadall 加载程序并重用已存在的 Maps..."
+# --- 2. 创建 Map ---
+function do_create_map() {
+    bpftool map create "$1" type "$2" key "$3" value "$4" entries "$5" name "$6" flags "${7:-0}"
+}
+function create_map() {
+    info "2. 创建 eBPF Maps..."
+    
+    tc_pin_clean
+    if mountpoint -q "${BPF_DIR}" 2>/dev/null || [[ -d "${BPF_DIR}" ]]; then
+        umount -f "${BPF_DIR}" 2>/dev/null || true
+        rm -rf "${BPF_DIR}"
+    fi
 
-# loadall 会创建 ${PROG_BASE} 目录，并在其中放入以 SEC 命名的程序文件
-bpftool prog loadall "${BPF_OBJ}" "${PROG_BASE}" \
-    map name hotpath_cache pinned "${HOTPATH_PIN}" \
-    map name pre_cache pinned "${PRE_PIN}" \
-    map name direct_ip_map pinned "${DIRECT_PIN}" \
-    map name blklist_ip_map pinned "${BLACK_PIN}" || {
-        err "加载 BPF 程序失败，请检查 ${BPF_OBJ} 及 Map 名称。"
-        exit 8
-    }
+    mkdir -p "${BPF_DIR}"
+    mount -t bpf bpf "${BPF_DIR}" 2>/dev/null || info "bpffs 已就绪"
+
+    do_create_map "${HOTPATH_PIN}" lru_hash 4 8 "${HOTMAP_SIZE}" hotpath_cache
+    do_create_map "${PRE_PIN}" lru_hash 4 16 "${PREMAP_SIZE}" pre_cache
+    do_create_map "${BLACK_PIN}" lpm_trie 8 4 "${BLACKMAP_SIZE}" blklist_ip_map 1
+    do_create_map "${DIRECT_PIN}" lpm_trie 8 4 "${DIRECTMAP_SIZE}" direct_ip_map 1
+}
+
+# --- 3. 加载程序 ---
+function load_ebpf_prog() {
+    info "3. 加载 BPF 程序..."
+    bpftool prog loadall "${BPF_OBJ}" "${PROG_BASE}" \
+        map name hotpath_cache pinned "${HOTPATH_PIN}" \
+        map name pre_cache pinned "${PRE_PIN}" \
+        map name direct_ip_map pinned "${DIRECT_PIN}" \
+        map name blklist_ip_map pinned "${BLACK_PIN}"
+
+    local pin_path
+    pin_path=$(get_pin_path)
+    
+    if [[ -z "${pin_path}" ]]; then
+        err "找不到已加载的 BPF 程序固定点，加载失败"
+        exit 9
+    fi
+}
 
 # --- 4. TC 挂载 ---
-info "4. 挂载 TC 过滤器..."
+function tc_pinning() {
+    info "4. 挂载 TC 过滤器至 ${LAN_IF} 和 ${WAN_IF}..."
 
-# 使用 find 查找目录下的第一个常规文件
-# -maxdepth 1: 只看当前目录
-# -type f: 只找文件
-# -print -quit: 找到第一个就打印并退出，效率极高
-FINAL_PIN_PATH=$(find "${PROG_BASE}" -maxdepth 1 -type f -print -quit)
+    tc_pin_clean
 
-if [[ -z "${FINAL_PIN_PATH}" ]]; then
-    err "在 ${PROG_BASE} 下未发现加载的程序，请检查 bpftool 加载日志。"
-    exit 9
-fi
+    local pin_path
+    pin_path=$(get_pin_path)
+    
+    if [[ -z "${pin_path}" ]]; then
+        err "找不到已加载的 BPF 程序固定点，请先执行 load_ebpf_prog"
+        exit 9
+    fi
 
-info "探测到程序固定点: ${FINAL_PIN_PATH}"
+    tc qdisc add dev "${LAN_IF}" clsact
+    tc filter add dev "${LAN_IF}" ingress bpf da pinned "${pin_path}"
+    tc filter add dev "${LAN_IF}" egress bpf da pinned "${pin_path}"
 
-# 执行挂载
-tc qdisc add dev "${LAN_DEV}" clsact
-tc filter add dev "${LAN_DEV}" ingress bpf da pinned "${FINAL_PIN_PATH}"
-tc filter add dev "${LAN_DEV}" egress bpf da pinned "${FINAL_PIN_PATH}"
-
-tc qdisc add dev "${WAN_DEV}" clsact
-tc filter add dev "${WAN_DEV}" ingress bpf da pinned "${FINAL_PIN_PATH}"
-tc filter add dev "${WAN_DEV}" egress bpf da pinned "${FINAL_PIN_PATH}"
+    tc qdisc add dev "${WAN_IF}" clsact
+    tc filter add dev "${WAN_IF}" ingress bpf da pinned "${pin_path}"
+    tc filter add dev "${WAN_IF}" egress bpf da pinned "${pin_path}"
+}
 
 # --- 5. Nftables 联动 ---
-info "5. 配置 nftables 联动 (全路径安全加速模式) ..."
+function nft_rule_set() {
+    info "5. 配置 nftables 联动..."
+    
+    nft delete table inet bpf_accel 2>/dev/null || true
+    nft add table inet bpf_accel
+    
+    # 定义 Flowtable (加速双向流量)
+    nft "add flowtable inet bpf_accel ft { hook ingress priority 0; devices = { ${LAN_IF}, ${WAN_IF} }; }"
+    
+    # 定义计数器
+    nft add counter inet bpf_accel bypass_clash_cnt
+    nft add counter inet bpf_accel local_accel_in
+    
+    # 创建核心链
+    nft "add chain inet bpf_accel early_bypass { type filter hook prerouting priority ${BYPASS_PRIORITY}; policy accept; }"
+    nft "add chain inet bpf_accel forward { type filter hook forward priority ${BPF_ACCEL_FORWARD_PRIORITY}; policy accept; }"
+    nft "add chain inet bpf_accel input { type filter hook input priority ${BPF_ACCEL_INPUT_PRIORITY}; policy accept; }"
+    nft "add chain inet bpf_accel output { type filter hook output priority ${BPF_ACCEL_OUTPUT_PRIORITY}; policy accept; }"
+    
+    # --- 规则下发 ---
+    
+    # A. BYPASS 逻辑
+    # 通过标记在 Prerouting 顶端截击
+    # 这里的 accept 能够确保包跳过同一个 hook 点后面所有的表 
+    nft "add rule inet bpf_accel early_bypass meta mark & 0xff000000 == ${DIRECT_PATH_MARK} counter name bypass_clash_cnt accept"
+    
+    # B. Forward 链：注册 Flowtable 实现真正的“内核旁路”
+    # 当首包被绕过 OpenClash 正常路由后，后续包通过 flowtable 极速转发
+    nft "add rule inet bpf_accel forward meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established flow add @ft"
+    nft "add rule inet bpf_accel forward meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established accept"
+    
+    # C. 本地流量 (Input/Output)
+    nft "add rule inet bpf_accel input meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established counter name local_accel_in accept"
+    nft "add rule inet bpf_accel output meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established accept"
+}
 
-nft delete table inet bpf_accel 2>/dev/null || true
-nft add table inet bpf_accel
+env_check
+create_map 
+load_ebpf_prog 
+tc_pinning
+nft_rule_set
 
-# 1. 开启 flowtable 加速引擎 (针对转发流量)
-nft "add flowtable inet bpf_accel ft { hook ingress priority 0; devices = { ${LAN_DEV}, ${WAN_DEV} }; }"
-
-# 2. 定义计数器
-nft add counter inet bpf_accel accel_packets
-nft add counter inet bpf_accel local_accel_in
-nft add counter inet bpf_accel local_accel_out
-
-# 3. 创建链 (设置 priority 为 0 或 filter，确保在大多数插件之前执行，但晚于 conntrack)
-nft "add chain inet bpf_accel monitor_chain { type filter hook prerouting priority -301; policy accept; }"
-nft "add chain inet bpf_accel forward { type filter hook forward priority 0; policy accept; }"
-nft "add chain inet bpf_accel input { type filter hook input priority 0; policy accept; }"
-nft "add chain inet bpf_accel output { type filter hook output priority 0; policy accept; }"
-
-# --- 规则部分 ---
-
-# A. 监控：在 Prerouting 记录所有被 eBPF 打标的原始包
-nft "add rule inet bpf_accel monitor_chain meta mark & 0xff000000 == ${DIRECT_PATH_MARK} counter name accel_packets"
-
-# B. 转发加速 (Forwarding)：针对内网设备。
-# 只有已建立的连接才进入 Flowtable，确保安全性
-nft "add rule inet bpf_accel forward meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established flow add @ft"
-# 如果 flowtable 没接管，这里作为保底直接放行，跳过后续防火墙
-nft "add rule inet bpf_accel forward meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established counter accept"
-
-# C. 本地入站加速 (Input)：针对发往路由器的直连回包
-# 严格限定 established 状态：确保只有路由器主动发起的请求回包能跳过防火墙
-# 这样你设置的“禁止外网 SSH”等规则对第一个 SYN 包依然有效
-nft "add rule inet bpf_accel input meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established counter name local_accel_in accept"
-
-# D. 本地出站加速 (Output)：针对路由器主动发出的请求
-# 绕过 OpenClash 在 Output 链上的判定逻辑，直接送往 postrouting
-nft "add rule inet bpf_accel output meta mark & 0xff000000 == ${DIRECT_PATH_MARK} ct state established counter name local_accel_out accept"
-
-info "---------------------------------------"
-info "加速引擎已启动！"
-info "转发加速: Flowtable (Established Only)"
-info "本地加速: Input/Output Bypass (Established Only)"
-info "---------------------------------------"
 
 info "---------------------------------------"
-info "程序位置: ${TC_PROG_PIN}"
+info "部署完成！请使用以下命令监控截流情况："
+info "watch -n 1 'nft list counters inet bpf_accel'"
 info "---------------------------------------"
