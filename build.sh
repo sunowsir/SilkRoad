@@ -1,11 +1,4 @@
 #!/bin/bash
-#
-# File     : build.sh
-# Author   : sun.wang
-# Mail     : sunowsir@163.com
-# Github   : github.com/sunowsir
-# Creation : 2026-01-21 14:24:02
-#
 
 # 1. 定义 SDK 路径
 export BPF_SDK=/home/openwrt/llvm-bpf-21.1.6.Linux-x86_64/llvm-bpf
@@ -22,4 +15,10 @@ $BPF_SDK/bin/clang -O2 -target bpf -g \
     -I$TARGET_INC \
     -I$TOOLCHAIN_INC \
     -c tc_direct_path.c -o tc_direct_path.o
+
+$BPF_SDK/bin/clang -O2 -target bpf -g \
+    -I$BPF_SDK/include \
+    -I$TARGET_INC \
+    -I$TOOLCHAIN_INC \
+    -c dns_steer.c -o dns_steer.o
 

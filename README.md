@@ -1,5 +1,6 @@
 # DirectPath 加速引擎
 > 直连流量加速引擎：利用ebpf实现国内IP流量快速转发
+> 请详细阅读代码，根据自身需求修改宏定义配置以及其他代码，请勿直接使用,后果自负
 
 ## 部署方法
   > 若执`check_cache.sh`发现缓存急速上涨并爆满，大概率是内网的P2P或PCDN服务导致
@@ -10,6 +11,7 @@
   4. 拷贝生成的`tc_direct_path.o`到openwrt设备上 
   5. 拷贝其他脚本`cleanup_env.sh`、`deploy_direct_path.sh`以及`load_china_ip.sh`等到openwrt设备上与`tc_direct_path.o`同目录
   6. 部署执行`deploy_direct_path.sh`，然后载入国内域名执行`load_china_ip.sh`
+  7. 部署执行dns直连脚本：`./manage_dns_bpf.sh stop && ./manage_dns_bpf.sh start && ./import_domestic.sh`
 
 ## 恢复环境
 
