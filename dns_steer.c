@@ -36,7 +36,7 @@ struct {
 } domain_map SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __uint(max_entries, 1);
     __type(key, __u32);
     __type(value, domain_key_t);
@@ -106,14 +106,14 @@ static __always_inline int do_lookup(struct xdp_md *ctx, struct iphdr *ip, void 
         __u32 *val = bpf_map_lookup_elem(&domain_map, key);
             if (unlikely(!val)) {
 
-            bpf_printk("key->prefixlen: [%02x]", key->prefixlen);
-            #pragma unroll
-            for (int i = 0; i < 16; i++) {
-                bpf_printk("key->domain[%d]: [%02x]", i, key->domain[i]);
-            }
-            bpf_printk("DNS [%s][%s][%d] Direct Receive session: %pI4:%d -> %pI4:%d\n", 
-                cursor, key->domain, key->prefixlen, 
-                &ip->saddr, bpf_ntohs(udp->source), &ip->daddr, bpf_ntohs(udp->dest));
+            // bpf_printk("key->prefixlen: [%02x]", key->prefixlen);
+            // #pragma unroll
+            // for (int i = 0; i < 16; i++) {
+            //     bpf_printk("key->domain[%d]: [%02x]", i, key->domain[i]);
+            // }
+            // bpf_printk("DNS [%s][%s][%d] Direct Receive session: %pI4:%d -> %pI4:%d\n", 
+            //     cursor, key->domain, key->prefixlen, 
+            //     &ip->saddr, bpf_ntohs(udp->source), &ip->daddr, bpf_ntohs(udp->dest));
 
             return XDP_PASS;
         }
