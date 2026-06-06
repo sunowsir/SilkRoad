@@ -174,8 +174,8 @@ int tc_direct_path(struct __sk_buff *skb) {
     struct iphdr *ip = (void *)(eth + 1);
     if ((void *)(ip + 1) > data_end) return TC_ACT_OK;
 
-    /* 如果目的地址不是私网地址，则不予处理 */
-    if (!is_private_ip(ip->daddr)) return TC_ACT_OK;
+    /* 只处理下游设备向本网关设备发起的DNS请求 */
+    if ((!is_private_ip(ip->saddr)) || (!is_private_ip(ip->daddr))) return TC_ACT_OK;
 
     if (do_lookup(ip)) skb->mark = bpf_htonl(DIRECT_MARK);
 

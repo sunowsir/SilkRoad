@@ -267,8 +267,8 @@ int xdp_direct_path(struct xdp_md *ctx) {
     struct iphdr *ip = data + sizeof(struct ethhdr);
     if (unlikely((void *)(ip + 1) > data_end)) return XDP_PASS;
 
-    /* 如果源地址不是私网地址则不予处理 */
-    if (!is_private_ip(ip->saddr)) return XDP_PASS;
+    /* 只处理下游设备向本网关设备发起的DNS请求 */
+    if ((!is_private_ip(ip->saddr)) || (!is_private_ip(ip->daddr))) return XDP_PASS;
 
     return do_lookup(ctx, (void *)ip + (ip->ihl * 4), ip, data_end);
 }
